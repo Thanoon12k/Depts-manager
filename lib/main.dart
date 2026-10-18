@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'home.dart';
 import 'store.dart';
+import 'sync.dart';
 import 'theme.dart';
 
 void main() async {
@@ -13,7 +14,8 @@ void main() async {
 
 class DebtsApp extends StatelessWidget {
   final Store store;
-  const DebtsApp({super.key, required this.store});
+  final Future<bool> Function(Store, String) sync;
+  const DebtsApp({super.key, required this.store, this.sync = syncBook});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -23,14 +25,15 @@ class DebtsApp extends StatelessWidget {
         supportedLocales: const [Locale('ar', 'IQ')],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
         theme: appTheme(),
-        home: Gate(store: store),
+        home: Gate(store: store, sync: sync),
       );
 }
 
 /// Shows the PIN screen until a book is open, and locks again after an hour away.
 class Gate extends StatefulWidget {
   final Store store;
-  const Gate({super.key, required this.store});
+  final Future<bool> Function(Store, String) sync;
+  const Gate({super.key, required this.store, required this.sync});
   @override
   State<Gate> createState() => _GateState();
 }
@@ -65,7 +68,7 @@ class _GateState extends State<Gate> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final key = _key;
     if (key != null) {
-      return HomePage(store: widget.store, bookKey: key,
+      return HomePage(store: widget.store, bookKey: key, sync: widget.sync,
           onKey: (k) => setState(() => _key = k), onLock: () => setState(() => _key = null));
     }
     return LockPage(store: widget.store, onOpen: (k) => setState(() => _key = k));

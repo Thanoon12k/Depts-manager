@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'store.dart';
+import 'sync.dart';
 import 'theme.dart';
 
 class HomePage extends StatefulWidget {
@@ -9,22 +12,38 @@ class HomePage extends StatefulWidget {
   final String bookKey;
   final ValueChanged<String> onKey; // the book moved to a new PIN
   final VoidCallback onLock;
+  /// Uploads and downloads the book; tests pass a fake.
+  final Future<bool> Function(Store, String) sync;
   const HomePage({super.key, required this.store, required this.bookKey, required this.onKey,
-      required this.onLock});
+      required this.onLock, this.sync = syncBook});
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  late final Book _b = widget.store.book(widget.bookKey)!;
-  final _amount = TextEditingController(), _note = TextEditingController();
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  static const every = Duration(seconds: 30);
+  late Book _b = widget.store.book(widget.bookKey);
+  final _amount = TextEditingController(), _note = TextEditingController(), _code = TextEditingController();
   final _scroll = ScrollController(), _amountFocus = FocusNode();
   String? _shop;
   String _date = today();
+  bool _syncing = false, _offline = false;
+  String? _lastSync;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _timer = Timer.periodic(every, (_) => _sync());
+    _sync();
+  }
 
   @override
   void dispose() {
-    for (final c in [_amount, _note]) {
+    WidgetsBinding.instance.removeObserver(this);
+    _timer?.cancel();
+    for (final c in [_amount, _note, _code]) {
       c.dispose();
     }
     _scroll.dispose();
@@ -32,9 +51,34 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  Future<void> _save() async {
-    await widget.store.saveBook(widget.bookKey, _b);
-    setState(() {});
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState s) {
+    if (s == AppLifecycleState.resumed) _sync();
+  }
+
+  Saved get _saved => widget.store.saved(widget.bookKey)!;
+  int get _pending => _saved.pending.length;
+
+  /// Uploads the queue and pulls other phones' changes; offline just leaves the queue.
+  Future<void> _sync() async {
+    if (_syncing || !mounted) return;
+    setState(() => _syncing = true);
+    try {
+      final changed = await widget.sync(widget.store, widget.bookKey);
+      if (!mounted) return;
+      if (changed) _b = widget.store.book(widget.bookKey);
+      _offline = false;
+      _lastSync = now().substring(11, 16);
+    } catch (_) {
+      _offline = true;
+    }
+    if (mounted) setState(() => _syncing = false);
+  }
+
+  Future<void> _record(Map<String, dynamic> event) async {
+    final b = await widget.store.record(widget.bookKey, event);
+    setState(() => _b = b);
+    _sync();
   }
 
   void _say(String text) => ScaffoldMessenger.of(context)
@@ -48,12 +92,14 @@ class _HomePageState extends State<HomePage> {
     final amount = parseAmount(_amount.text);
     if (shop == null || amount == null) return _say('اختار الدكان واكتب المبلغ صح (أرقام بس)');
     final note = _note.text.trim();
-    final settled = _b.add(shop, kind, amount, _date, note.length > 300 ? note.substring(0, 300) : note);
+    final closed = _b.archive.length;
+    await _record({'t': kind, 'shop': shop.id, 'amount': amount, 'date': _date,
+        'note': note.length > 300 ? note.substring(0, 300) : note});
     _amount.clear();
     _note.clear();
-    FocusScope.of(context).unfocus();
-    await _save();
-    _say(settled ? '✔ حساب ${shop.name} تصفّر وانتقل للأرشيف' : (kind == 'buy' ? '✔ انسجل المسواك' : '✔ انسجل التسديد'));
+    if (mounted) FocusScope.of(context).unfocus();
+    _say(_b.archive.length > closed ? '✔ حساب ${shop.name} تصفّر وانتقل للأرشيف'
+        : (kind == 'buy' ? '✔ انسجل المسواك' : '✔ انسجل التسديد'));
   }
 
   Future<void> _payAll(Shop shop) async {
@@ -62,15 +108,13 @@ class _HomePageState extends State<HomePage> {
         !await confirm(context, 'تسدد كل دين ${shop.name} (${iqd(bal)} د.ع)؟ الحساب راح يتصفر وينتقل للأرشيف.')) {
       return;
     }
-    _b.add(shop, 'pay', bal, today(), '');
-    await _save();
+    await _record({'t': 'pay', 'shop': shop.id, 'amount': bal, 'date': today(), 'note': ''});
     _say('✔ حساب ${shop.name} تصفّر وانتقل للأرشيف');
   }
 
   Future<void> _delete(Entry e) async {
     if (!await confirm(context, 'تحذف هذا التسجيل؟')) return;
-    _b.entries.removeWhere((x) => x.id == e.id);
-    await _save();
+    await _record({'t': 'del', 'entry': e.id});
   }
 
   void _pick(Shop shop) {
@@ -90,12 +134,15 @@ class _HomePageState extends State<HomePage> {
     final shops = [..._b.shops]..sort((a, b) => _b.shopBalance(b.id).compareTo(_b.shopBalance(a.id)));
     return Scaffold(
       appBar: AppBar(
+        titleSpacing: 16,
         title: const Row(children: [
           Text('🧾 ', style: TextStyle(fontSize: 24)),
           Text('دفتر ', style: TextStyle(fontWeight: FontWeight.w800)),
           Text('الدين', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.accent)),
         ]),
         actions: [
+          _syncChip(),
+          const SizedBox(width: 6),
           Padding(
             padding: const EdgeInsetsDirectional.only(end: 12),
             child: Btn('🔒 قفل', kind: BtnKind.ghost, onTap: widget.onLock),
@@ -103,18 +150,40 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
-          controller: _scroll,
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-          children: [
-            _hero(),
-            _form(),
-            for (final s in shops) _shopCard(s),
-            _shopsEditor(),
-            _pinEditor(),
-            _archive(),
-          ],
+        child: RefreshIndicator(
+          onRefresh: _sync,
+          child: ListView(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            children: [
+              _hero(),
+              _form(),
+              for (final s in shops) _shopCard(s),
+              _shopsEditor(),
+              _syncEditor(),
+              _pinEditor(),
+              _archive(),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  /// "☁️" when everything is uploaded, "⏳ 3" while changes wait for the internet.
+  Widget _syncChip() {
+    final n = _pending;
+    final (label, color) = _syncing
+        ? ('↻', AppColors.muted)
+        : n > 0 ? ('⏳ $n', AppColors.accent2) : ('☁️ ✔', AppColors.good);
+    return InkWell(
+      onTap: _sync,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(color: AppColors.panel, borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.line)),
+        child: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 14)),
       ),
     );
   }
@@ -131,6 +200,9 @@ class _HomePageState extends State<HomePage> {
                 TextSpan(text: iqd(_b.total)),
                 const TextSpan(text: ' د.ع', style: TextStyle(fontSize: 16)),
               ]), style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: AppColors.accent, height: 1.2)),
+              if (_pending > 0 && _offline)
+                Text('📴 ماكو إنترنت: $_pending تسجيل محفوظ بالقائمة، يرتفع لحاله أول ما يرجع',
+                    style: const TextStyle(color: AppColors.accent2, fontSize: 12)),
             ]),
           ),
         ]),
@@ -192,32 +264,36 @@ class _HomePageState extends State<HomePage> {
         ]),
       );
 
-  Widget _entryRow(Entry e, {bool deletable = false}) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 7),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.line))),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${e.isBuy ? '+' : '−'}${iqd(e.amount)}',
-              style: TextStyle(fontWeight: FontWeight.w700, color: e.isBuy ? AppColors.accent : AppColors.good)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('${e.isBuy ? 'مسواك' : 'تسديد'}${e.note.isEmpty ? '' : ' · ${e.note}'}', style: const TextStyle(fontSize: 14)),
-              Text(e.date, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-            ]),
-          ),
-          if (deletable)
-            InkWell(
-              onTap: () => _delete(e),
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(color: AppColors.panel2, borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppColors.line)),
-                child: const Text('✕', style: TextStyle(color: AppColors.muted, fontSize: 13)),
-              ),
+  Widget _entryRow(Entry e, {bool deletable = false}) {
+    final waiting = _saved.pending.contains(e.id);
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.line))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('${e.isBuy ? '+' : '−'}${iqd(e.amount)}',
+            style: TextStyle(fontWeight: FontWeight.w700, color: e.isBuy ? AppColors.accent : AppColors.good)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${e.isBuy ? 'مسواك' : 'تسديد'}${e.note.isEmpty ? '' : ' · ${e.note}'}', style: const TextStyle(fontSize: 14)),
+            Text('${e.date}${waiting ? ' · ⏳ ينتظر الرفع' : ''}',
+                style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+          ]),
+        ),
+        if (deletable)
+          InkWell(
+            onTap: () => _delete(e),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(color: AppColors.panel2, borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.line)),
+              child: const Text('✕', style: TextStyle(color: AppColors.muted, fontSize: 13)),
             ),
-        ]),
-      );
+          ),
+      ]),
+    );
+  }
 
   Widget _shopCard(Shop s) {
     final items = _b.openEntries(s.id);
@@ -263,31 +339,88 @@ class _HomePageState extends State<HomePage> {
           ])),
           children: [
             _ShopRow(key: const ValueKey('new'), name: '', hint: 'اسم الدكان الجديد', saveLabel: '➕ إضافة',
-                onSave: (name) async {
-                  _b.shops.add(Shop(newId(), name));
-                  await _save();
-                }),
+                onSave: (name) => _record({'t': 'shop', 'shop': newId(), 'name': name})),
             for (final s in _b.shops)
               _ShopRow(
                 key: ValueKey(s.id),
                 name: s.name,
                 saveLabel: 'حفظ',
                 onSave: (name) async {
-                  s.name = name;
-                  await _save();
+                  await _record({'t': 'shop', 'shop': s.id, 'name': name});
                   _say('✔ انحفظ');
                 },
                 onRemove: () async {
                   if (_b.openEntries(s.id).isNotEmpty) return _say('ما ينحذف: الدكان بي حساب مفتوح، سدده أول');
                   if (!await confirm(context, 'تحذف ${s.name}؟')) return;
-                  _b.shops.remove(s);
                   if (_shop == s.id) _shop = null;
-                  await _save();
+                  await _record({'t': 'unshop', 'shop': s.id});
                 },
               ),
           ],
         ),
       );
+
+  Widget _syncEditor() {
+    final n = _pending;
+    final code = _saved.sync;
+    return Panel(
+      child: ExpansionTile(
+        title: Text.rich(TextSpan(children: [
+          const TextSpan(text: '☁️ المزامنة ', style: TextStyle(fontWeight: FontWeight.w800)),
+          TextSpan(text: n > 0 ? '$n تسجيل بالقائمة' : 'كل شي مرفوع',
+              style: TextStyle(color: n > 0 ? AppColors.accent2 : AppColors.muted, fontSize: 13)),
+        ])),
+        expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            n > 0
+                ? (_offline ? '📴 ماكو إنترنت. التسجيلات محفوظة بالقائمة على التلفون، وترتفع لحالها أول ما يرجع الإنترنت.'
+                    : 'جاري رفع $n تسجيل...')
+                : '✔ كل التسجيلات مرفوعة${_lastSync == null ? '' : ' (آخر مزامنة $_lastSync)'}.',
+            style: const TextStyle(color: AppColors.muted, fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          Btn(_syncing ? '↻ جاري...' : '↻ ارفع هسه', kind: BtnKind.ghost, onTap: _sync),
+          const SizedBox(height: 14),
+          const Text('كود الدفتر: اكتبه بتلفون ثاني حتى يصير نفس الدفتر بالتلفونين. لا تنطيه لأحد.',
+              style: TextStyle(color: AppColors.muted, fontSize: 13)),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(
+              child: SelectableText(showSyncCode(code), textDirection: TextDirection.ltr,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, letterSpacing: 1)),
+            ),
+            Btn('📋 نسخ', kind: BtnKind.ghost, onTap: () async {
+              await Clipboard.setData(ClipboardData(text: code));
+              _say('✔ انسخ الكود');
+            }),
+          ]),
+          const SizedBox(height: 14),
+          const Text('عندك الدفتر بتلفون ثاني؟ اكتب كوده هنا:', style: TextStyle(color: AppColors.muted, fontSize: 13)),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(
+              child: TextField(controller: _code, textDirection: TextDirection.ltr,
+                  decoration: const InputDecoration(hintText: 'xxxx-xxxx-...')),
+            ),
+            const SizedBox(width: 8),
+            Btn('ربط', onTap: () async {
+              final c = parseSyncCode(_code.text);
+              if (c == null) return _say('الكود لازم 32 حرف/رقم');
+              if (c == code) return _say('هذا كود نفس الدفتر');
+              if (!await confirm(context, 'تربط هذا الدفتر بالكود؟ تسجيلات هذا التلفون راح تندمج ويا الدفتر الثاني.')) return;
+              await widget.store.join(widget.bookKey, c);
+              _code.clear();
+              setState(() {});
+              await _sync();
+              if (mounted) _say(_offline ? 'انربط. راح يتزامن أول ما يرجع الإنترنت' : '✔ انربط وتزامن');
+            }),
+          ]),
+          const SizedBox(height: 6),
+        ],
+      ),
+    );
+  }
 
   Widget _pinEditor() => Panel(child: _PinEditor(onChange: (oldPin, newPin) async {
         final s = widget.store;
