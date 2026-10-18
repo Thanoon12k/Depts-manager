@@ -14,7 +14,7 @@ void main() async {
 
 class DebtsApp extends StatelessWidget {
   final Store store;
-  final Future<bool> Function(Store, String) sync;
+  final SyncFn sync;
   const DebtsApp({super.key, required this.store, this.sync = syncBook});
 
   @override
@@ -32,7 +32,7 @@ class DebtsApp extends StatelessWidget {
 /// Shows the PIN screen until a book is open, and locks again after an hour away.
 class Gate extends StatefulWidget {
   final Store store;
-  final Future<bool> Function(Store, String) sync;
+  final SyncFn sync;
   const Gate({super.key, required this.store, required this.sync});
   @override
   State<Gate> createState() => _GateState();

@@ -102,6 +102,44 @@ void main() {
     expect(a.book(ka).archive.single.id, b.book(kb).archive.single.id);
   });
 
+  test('one queued operation can be uploaded on its own', () async {
+    final server = FakeServer();
+    final (s, k) = await phone('111111');
+    await s.record(k, buy('d1', 7000));
+    final last = s.saved(k)!.queue.firstWhere((e) => e['t'] == 'buy');
+    await syncBook(s, k, only: {last['id']}, client: server.client);
+    expect(server.rows.single.event['amount'], 7000);
+    expect(s.saved(k)!.pending.length, 5);
+    await syncBook(s, k, only: {}, client: server.client); // download only
+    expect(s.saved(k)!.pending.length, 5);
+  });
+
+  testWidgets('manual mode: operations stay queued until pushed from the pending list', (t) async {
+    final server = FakeServer();
+    final store = await Store.load();
+    final key = await store.create('ذنون', '123456');
+    store.saved(key)!.auto = false;
+    await store.record(key, buy('d0', 2500));
+    await t.pumpWidget(DebtsApp(store: store, sync: (s, k, {only}) => syncBook(s, k, only: only, client: server.client)));
+    await t.enterText(find.byType(TextField).first, '123456');
+    await t.tap(find.text('فتح'));
+    await t.pumpAndSettle();
+    expect(server.rows, isEmpty); // nothing went up by itself
+    await t.tap(find.text('⏳ 6'));
+    await t.pumpAndSettle();
+    expect(find.text('⏳ العمليات المعلقة (6)'), findsOneWidget);
+    expect(find.textContaining('🛒 مسواك 2,500 د.ع · دكان أحمد أنس'), findsOneWidget);
+    await t.tap(find.text('⬆ ارفع').first);
+    await t.pumpAndSettle();
+    expect(server.rows.length, 1);
+    expect(find.text('⏳ العمليات المعلقة (5)'), findsOneWidget);
+    await t.tap(find.text('⬆ ارفع الكل (5)'));
+    await t.pumpAndSettle();
+    expect(server.rows.length, 6);
+    expect(find.textContaining('ماكو شي معلق'), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
+
   test('a version 1 book is turned into events and queued', () async {
     SharedPreferences.setMockInitialValues({
       'debts_db': jsonEncode({
@@ -131,7 +169,7 @@ void main() {
   testWidgets('first launch creates a book, then the PIN opens it', (t) async {
     final store = await Store.load();
     final server = FakeServer()..online = false;
-    await t.pumpWidget(DebtsApp(store: store, sync: (s, k) => syncBook(s, k, client: server.client)));
+    await t.pumpWidget(DebtsApp(store: store, sync: (s, k, {only}) => syncBook(s, k, only: only, client: server.client)));
     expect(find.text('دفتر جديد'), findsOneWidget);
     final fields = find.byType(TextField);
     await t.enterText(fields.at(0), 'ذنون');

@@ -239,7 +239,11 @@ class Saved {
   final List<Map<String, dynamic>> events;
   final Set<String> pending;
   int after;
+  bool auto = true; // false: queued events go up only when the person pushes them
   Saved(this.sync, this.events, this.pending, this.after);
+
+  /// The queued events, oldest first.
+  List<Map<String, dynamic>> get queue => events.where((e) => pending.contains(e['id'])).toList()..sort(byTime);
 
   factory Saved.fromJson(Map<String, dynamic> j) {
     if (j['events'] == null) return Saved._fromV1(j);
@@ -248,13 +252,14 @@ class Saved {
       [for (final e in j['events']) Map<String, dynamic>.from(e)],
       {...(j['pending'] as List).cast<String>()},
       j['after'] ?? 0,
-    );
+    )..auto = j['auto'] ?? true;
   }
   Map<String, dynamic> toJson() => {
     'sync': sync,
     'events': events,
     'pending': [...pending],
     'after': after,
+    'auto': auto,
   };
 
   /// A book saved by version 1 (plain shops/entries/archive): turned into events, all queued.

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'pending.dart';
 import 'store.dart';
 import 'sync.dart';
 import 'theme.dart';
@@ -13,7 +14,7 @@ class HomePage extends StatefulWidget {
   final ValueChanged<String> onKey; // the book moved to a new PIN
   final VoidCallback onLock;
   /// Uploads and downloads the book; tests pass a fake.
-  final Future<bool> Function(Store, String) sync;
+  final SyncFn sync;
   const HomePage({super.key, required this.store, required this.bookKey, required this.onKey,
       required this.onLock, this.sync = syncBook});
   @override
@@ -60,19 +61,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int get _pending => _saved.pending.length;
 
   /// Uploads the queue and pulls other phones' changes; offline just leaves the queue.
-  Future<void> _sync() async {
-    if (_syncing || !mounted) return;
+  /// With automatic upload off, only a [manual] call uploads (all, or the events in [only]);
+  /// the automatic calls then just download. Returns an error message, or null.
+  Future<String?> _sync({bool manual = false, Set<String>? only}) async {
+    if (!mounted) return null;
+    if (_syncing) return 'جاري رفع ثاني، جرب بعد شوية';
     setState(() => _syncing = true);
+    String? err;
     try {
-      final changed = await widget.sync(widget.store, widget.bookKey);
-      if (!mounted) return;
+      final push = manual || _saved.auto ? only : const <String>{};
+      final changed = await widget.sync(widget.store, widget.bookKey, only: push);
+      if (!mounted) return null;
       if (changed) _b = widget.store.book(widget.bookKey);
       _offline = false;
       _lastSync = now().substring(11, 16);
     } catch (_) {
       _offline = true;
+      err = 'ماكو إنترنت، العمليات باقية بالقائمة';
     }
     if (mounted) setState(() => _syncing = false);
+    return err;
+  }
+
+  Future<void> _openPending() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => PendingPage(store: widget.store, bookKey: widget.bookKey,
+            push: (only) => _sync(manual: true, only: only))));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _setAuto(bool on) async {
+    setState(() => _saved.auto = on);
+    await widget.store.save();
+    if (on) _sync();
   }
 
   Future<void> _record(Map<String, dynamic> event) async {
@@ -151,7 +172,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: _sync,
+          onRefresh: () => _sync(manual: true),
           child: ListView(
             controller: _scroll,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -177,7 +198,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ? ('↻', AppColors.muted)
         : n > 0 ? ('⏳ $n', AppColors.accent2) : ('☁️ ✔', AppColors.good);
     return InkWell(
-      onTap: _sync,
+      onTap: n > 0 ? _openPending : () => _sync(manual: true),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -200,8 +221,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 TextSpan(text: iqd(_b.total)),
                 const TextSpan(text: ' د.ع', style: TextStyle(fontSize: 16)),
               ]), style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: AppColors.accent, height: 1.2)),
-              if (_pending > 0 && _offline)
-                Text('📴 ماكو إنترنت: $_pending تسجيل محفوظ بالقائمة، يرتفع لحاله أول ما يرجع',
+              if (_pending > 0 && (_offline || !_saved.auto))
+                Text(
+                    _saved.auto
+                        ? '📴 ماكو إنترنت: $_pending تسجيل محفوظ بالقائمة، يرتفع لحاله أول ما يرجع'
+                        : '⏳ $_pending عملية معلقة، الرفع يدوي: دوس ⏳ فوق وارفعها',
                     style: const TextStyle(color: AppColors.accent2, fontSize: 12)),
             ]),
           ),
@@ -373,14 +397,31 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            n > 0
-                ? (_offline ? '📴 ماكو إنترنت. التسجيلات محفوظة بالقائمة على التلفون، وترتفع لحالها أول ما يرجع الإنترنت.'
-                    : 'جاري رفع $n تسجيل...')
-                : '✔ كل التسجيلات مرفوعة${_lastSync == null ? '' : ' (آخر مزامنة $_lastSync)'}.',
+            n == 0
+                ? '✔ كل التسجيلات مرفوعة${_lastSync == null ? '' : ' (آخر مزامنة $_lastSync)'}.'
+                : !_saved.auto ? '$n عملية معلقة. الرفع يدوي: شوفها وارفعها من العمليات المعلقة.'
+                : _offline ? '📴 ماكو إنترنت. التسجيلات محفوظة بالقائمة على التلفون، وترتفع لحالها أول ما يرجع الإنترنت.'
+                : 'جاري رفع $n تسجيل...',
             style: const TextStyle(color: AppColors.muted, fontSize: 13),
           ),
-          const SizedBox(height: 10),
-          Btn(_syncing ? '↻ جاري...' : '↻ ارفع هسه', kind: BtnKind.ghost, onTap: _sync),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _saved.auto,
+            onChanged: _setAuto,
+            activeThumbColor: AppColors.good,
+            title: const Text('⚡ رفع تلقائي', style: TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Text(_saved.auto ? 'العمليات ترتفع لحالها أول ما يكون إنترنت' : 'العمليات تبقى معلقة لحد ما ترفعها انت',
+                style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+          ),
+          Row(children: [
+            Expanded(child: Btn('📋 المعلقة ($n)', kind: BtnKind.ghost, onTap: _openPending)),
+            const SizedBox(width: 8),
+            Expanded(child: Btn(_syncing ? '↻ جاري...' : '⬆ ارفع الكل', kind: BtnKind.ghost,
+                onTap: () async {
+                  final err = await _sync(manual: true);
+                  if (err != null) _say(err);
+                })),
+          ]),
           const SizedBox(height: 14),
           const Text('كود الدفتر: اكتبه بتلفون ثاني حتى يصير نفس الدفتر بالتلفونين. لا تنطيه لأحد.',
               style: TextStyle(color: AppColors.muted, fontSize: 13)),
@@ -412,7 +453,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               await widget.store.join(widget.bookKey, c);
               _code.clear();
               setState(() {});
-              await _sync();
+              await _sync(manual: true);
               if (mounted) _say(_offline ? 'انربط. راح يتزامن أول ما يرجع الإنترنت' : '✔ انربط وتزامن');
             }),
           ]),
