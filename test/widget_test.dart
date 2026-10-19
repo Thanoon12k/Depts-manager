@@ -115,6 +115,8 @@ void main() {
   });
 
   testWidgets('manual mode: operations stay queued until pushed from the pending list', (t) async {
+    t.view.physicalSize = const Size(1080, 2400); // a phone screen, so the whole list shows
+    addTearDown(t.view.reset);
     final server = FakeServer();
     final store = await Store.load();
     final key = await store.create('ذنون', '123456');
@@ -128,6 +130,7 @@ void main() {
     await t.tap(find.text('⏳ 6'));
     await t.pumpAndSettle();
     expect(find.text('⏳ العمليات المعلقة (6)'), findsOneWidget);
+    await t.scrollUntilVisible(find.textContaining('🛒 مسواك 2,500 د.ع · دكان أحمد أنس'), 200);
     expect(find.textContaining('🛒 مسواك 2,500 د.ع · دكان أحمد أنس'), findsOneWidget);
     await t.tap(find.text('⬆ ارفع').first);
     await t.pumpAndSettle();
@@ -192,5 +195,18 @@ void main() {
     expect(find.text('☁️ ✔'), findsOneWidget); // back online: uploaded
     expect(server.rows.length, 5);
     await t.pumpWidget(const SizedBox()); // stop the sync timer
+  });
+
+  testWidgets('the app opens even when a saved book is unreadable', (t) async {
+    SharedPreferences.setMockInitialValues({
+      'debts_db': jsonEncode({'salt': 'x', 'books': {'bad': {'events': 'nonsense'}}})
+    });
+    await t.pumpWidget(const Boot());
+    expect(find.text('دفتر الدين'), findsOneWidget); // the splash, not an empty screen
+    await t.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
+    await t.pumpAndSettle();
+    expect(find.text('دفتر جديد'), findsOneWidget);
+    final saved = jsonDecode((await SharedPreferences.getInstance()).getString('debts_db')!);
+    expect(saved['broken'], isNull); // kept aside only in memory until the next save
   });
 }

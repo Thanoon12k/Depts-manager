@@ -156,11 +156,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
-        title: const Row(children: [
-          Text('🧾 ', style: TextStyle(fontSize: 24)),
-          Text('دفتر ', style: TextStyle(fontWeight: FontWeight.w800)),
-          Text('الدين', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.accent)),
-        ]),
+        title: const FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: AlignmentDirectional.centerStart,
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text('🧾 ', style: TextStyle(fontSize: 24)),
+            Text('دفتر ', style: TextStyle(fontWeight: FontWeight.w800)),
+            Text('الدين', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.accent)),
+          ]),
+        ),
         actions: [
           _syncChip(),
           const SizedBox(width: 6),

@@ -14,6 +14,11 @@ moves to the archive; any overpayment stays as credit in the new account.
 - Server: Supabase RPCs `debts_push` / `debts_pull` over an append-only event log (`debts_book.events`),
   addressed by the book's random 128-bit code. The PIN never leaves the phone.
 
+- Startup never sits on a blank screen: the splash shows at once, and if the saved data can't be read
+  the app says so with a retry button. A book that can't be read is set aside, not lost.
+
+Icon: `python3 tool/make_icon.py` draws `assets/icon.png`, the launcher mipmaps and the adaptive-icon layers.
+
 ```
 flutter test
 flutter build apk --release

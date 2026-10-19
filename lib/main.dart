@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -7,9 +9,78 @@ import 'store.dart';
 import 'sync.dart';
 import 'theme.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(DebtsApp(store: await Store.load()));
+  // Show errors on screen instead of a blank one.
+  ErrorWidget.builder = (d) => Material(
+        color: AppColors.bg,
+        child: Padding(padding: const EdgeInsets.all(16), child: Text('صار خطأ:\n${d.exception}',
+            textDirection: TextDirection.rtl, style: const TextStyle(color: AppColors.bad))),
+      );
+  // The first frame is drawn right away; the book loads behind the splash.
+  runApp(const Boot());
+}
+
+/// Loads the saved books, then opens the app. Any failure is shown with a retry button,
+/// so the phone never sits on an empty screen.
+class Boot extends StatefulWidget {
+  const Boot({super.key});
+  @override
+  State<Boot> createState() => _BootState();
+}
+
+class _BootState extends State<Boot> {
+  Store? _store;
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _error = null);
+    try {
+      final s = await Store.load().timeout(const Duration(seconds: 20));
+      if (mounted) setState(() => _store = s);
+    } catch (e) {
+      if (mounted) setState(() => _error = e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = _store;
+    if (store != null) return DebtsApp(store: store);
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      locale: const Locale('ar', 'IQ'),
+      supportedLocales: const [Locale('ar', 'IQ')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      theme: appTheme(),
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('📒', style: TextStyle(fontSize: 56)),
+              const SizedBox(height: 8),
+              const Text('دفتر الدين', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 16),
+              if (_error == null)
+                const CircularProgressIndicator()
+              else ...[
+                Flash('ما گدرت أفتح البيانات: $_error'),
+                const SizedBox(height: 12),
+                Btn('إعادة المحاولة', onTap: _load),
+              ],
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class DebtsApp extends StatelessWidget {

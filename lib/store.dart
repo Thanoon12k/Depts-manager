@@ -292,15 +292,27 @@ class Store {
   final Map<String, dynamic> _db;
   final Map<String, Saved> _books = {};
   Store._(this._p, this._db) {
-    (_db['books'] as Map<String, dynamic>).forEach((k, v) => _books[k] = Saved.fromJson(v));
+    final bad = <String, dynamic>{};
+    (_db['books'] as Map<String, dynamic>).forEach((k, v) {
+      try {
+        _books[k] = Saved.fromJson(v);
+      } catch (_) {
+        bad[k] = v; // unreadable: kept aside untouched instead of stopping the app
+      }
+    });
+    if (bad.isNotEmpty) (_db['broken'] ??= <String, dynamic>{}).addAll(bad);
   }
 
   static Future<Store> load() async {
     final p = await SharedPreferences.getInstance();
     Map<String, dynamic> db;
     try {
-      db = jsonDecode(p.getString(_dbKey) ?? '{}');
+      db = Map<String, dynamic>.from(jsonDecode(p.getString(_dbKey) ?? '{}'));
+      if (db['books'] is! Map) db.remove('books');
+      if (db['tries'] is! Map) db.remove('tries');
     } catch (_) {
+      final raw = p.getString(_dbKey);
+      if (raw != null) await p.setString('${_dbKey}_broken', raw); // keep a copy, never lose it
       db = {};
     }
     db.putIfAbsent('salt', () => hex(32));
