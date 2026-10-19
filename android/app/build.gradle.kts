@@ -34,7 +34,10 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // No R8: shared_preferences_android calls its Kotlin code from Dart through JNI, by
+            // class and method name, and R8 renames or drops those (the app then can't open its data).
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
