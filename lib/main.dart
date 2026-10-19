@@ -11,6 +11,7 @@ import 'theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark); // dark status bar icons on the light app
   // Show errors on screen instead of a blank one.
   ErrorWidget.builder = (d) => Material(
         color: AppColors.bg,

@@ -1,27 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-/// The apps1monitor hub's dark palette, so the app looks like the web tab.
+/// Light palette: warm off-white page, white cards, the hub's orange accent.
 class AppColors {
-  static const bg = Color(0xFF12101A);
-  static const panel = Color(0xFF1F1C2B);
-  static const panel2 = Color(0xFF282437);
-  static const line = Color(0x17FFFFFF);
-  static const text = Color(0xFFF3EFE6);
-  static const muted = Color(0xFFA7A1B6);
-  static const accent = Color(0xFFFF6B3D);
-  static const accent2 = Color(0xFFFF9A3C);
-  static const good = Color(0xFF3DDC97);
-  static const credit = Color(0xFF38BDF8);
-  static const bad = Color(0xFFFF6B81);
+  static const bg = Color(0xFFF6F3EE);
+  static const panel = Color(0xFFFFFFFF);
+  static const panel2 = Color(0xFFF1EDE6);
+  static const line = Color(0x1F000000);
+  static const text = Color(0xFF1F1C2B);
+  static const muted = Color(0xFF6B6577);
+  static const accent = Color(0xFFE8552A);
+  static const accent2 = Color(0xFFE07A12);
+  static const good = Color(0xFF15A36B);
+  static const credit = Color(0xFF0284C7);
+  static const bad = Color(0xFFD6334F);
 }
 
 ThemeData appTheme() {
   final base = ThemeData(
     useMaterial3: true,
-    brightness: Brightness.dark,
+    brightness: Brightness.light,
     fontFamily: 'Cairo',
     scaffoldBackgroundColor: AppColors.bg,
-    colorScheme: const ColorScheme.dark(
+    colorScheme: const ColorScheme.light(
         primary: AppColors.accent, secondary: AppColors.good, surface: AppColors.panel,
         onSurface: AppColors.text, error: AppColors.bad),
   );
@@ -29,6 +30,7 @@ ThemeData appTheme() {
       borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: c, width: w));
   return base.copyWith(
     appBarTheme: const AppBarTheme(backgroundColor: AppColors.bg, foregroundColor: AppColors.text,
+        systemOverlayStyle: SystemUiOverlayStyle.dark,
         elevation: 0, scrolledUnderElevation: 0),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
@@ -65,7 +67,7 @@ class Panel extends StatelessWidget {
           color: AppColors.panel,
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: AppColors.line),
-          boxShadow: const [BoxShadow(color: Color(0x8C000000), blurRadius: 40, offset: Offset(0, 22), spreadRadius: -22)],
+          boxShadow: const [BoxShadow(color: Color(0x1A3A2A10), blurRadius: 24, offset: Offset(0, 10), spreadRadius: -12)],
         ),
         clipBehavior: Clip.antiAlias,
         child: Container(
