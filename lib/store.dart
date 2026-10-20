@@ -8,7 +8,8 @@
 // it in time order. New events wait in a queue on the phone and are uploaded whenever there is
 // internet (see sync.dart), so the same book can be kept on several phones.
 //
-// Each 6-digit PIN opens its own book on this phone, so several people can keep separate books.
+// A 4-digit PIN is the book: the same PIN opens the same book on every phone, because the book's
+// code on the server is derived from it. Different PINs keep separate books.
 import 'dart:convert';
 import 'dart:math';
 
@@ -17,8 +18,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const defaultShops = ['دكان أحمد أنس', 'دكان ابن هذال', 'دكان عمار (مخضر)', 'مول حبش'];
 const creditNote = 'رصيد زايد من الحساب السابق';
-const maxTries = 5;
-const lockMinutes = 15;
 
 const _dbKey = 'debts_db';
 final _rand = Random.secure();
@@ -50,16 +49,11 @@ int? parseAmount(String raw) {
   return n > 0 && n < 10000000000 ? n : null;
 }
 
-bool validPin(String p) => RegExp(r'^\d{6}$').hasMatch(p);
+/// A new book's PIN: 4 digits. (Books made by older versions may have 6.)
+bool validPin(String p) => RegExp(r'^\d{4}$').hasMatch(p);
 
-/// A sync code as typed by a person: 32 hex characters, spaces and dashes ignored.
-String? parseSyncCode(String raw) {
-  final t = latinDigits(raw).toLowerCase().replaceAll(RegExp(r'[\s-]'), '');
-  return RegExp(r'^[0-9a-f]{32}$').hasMatch(t) ? t : null;
-}
-
-/// "0123456789abcdef..." -> "0123-4567-89ab-..."
-String showSyncCode(String c) => [for (var i = 0; i < c.length; i += 4) c.substring(i, min(i + 4, c.length))].join('-');
+/// The book's code on the server for [pin]: the same on every phone.
+String syncCodeFor(String pin) => sha256.convert(utf8.encode('debts-book:$pin')).toString().substring(0, 32);
 
 /// 1234567 -> "1,234,567"
 String iqd(int n) {
@@ -123,16 +117,13 @@ int byTime(Map a, Map b) {
   return c != 0 ? c : (a['id'] as String).compareTo(b['id']);
 }
 
-/// The events that start a new book. Default shops get fixed ids, so two phones joining
-/// the same book don't end up with each shop twice.
-List<Map<String, dynamic>> startEvents(String name) {
-  final at = now();
-  return [
-    {'id': newId(), 'at': at, 't': 'book', 'name': name},
-    for (var i = 0; i < defaultShops.length; i++)
-      {'id': newId(), 'at': at, 't': 'shop', 'shop': 'd$i', 'name': defaultShops[i]},
-  ];
-}
+/// The events that start a new book: the default shops. They have fixed ids and the earliest
+/// time, so phones that start the same book send the same events (stored once), and a rename
+/// made on any phone comes after them.
+List<Map<String, dynamic>> startEvents() => [
+      for (var i = 0; i < defaultShops.length; i++)
+        {'id': 'startd$i', 'at': '0000-00-00 00:00:00.000', 't': 'shop', 'shop': 'd$i', 'name': defaultShops[i]},
+    ];
 
 /// The state of a book: what its events add up to.
 class Book {
@@ -286,7 +277,7 @@ class Saved {
   }
 }
 
-/// All books on this phone, keyed by a hash of their PIN, plus the wrong-PIN counter.
+/// All books on this phone, keyed by a hash of their PIN.
 class Store {
   final SharedPreferences _p;
   final Map<String, dynamic> _db;
@@ -309,7 +300,6 @@ class Store {
     try {
       db = Map<String, dynamic>.from(jsonDecode(p.getString(_dbKey) ?? '{}'));
       if (db['books'] is! Map) db.remove('books');
-      if (db['tries'] is! Map) db.remove('tries');
     } catch (_) {
       final raw = p.getString(_dbKey);
       if (raw != null) await p.setString('${_dbKey}_broken', raw); // keep a copy, never lose it
@@ -317,11 +307,9 @@ class Store {
     }
     db.putIfAbsent('salt', () => hex(32));
     db.putIfAbsent('books', () => <String, dynamic>{});
-    db.putIfAbsent('tries', () => <String, dynamic>{'n': 0});
     return Store._(p, db);
   }
 
-  Map<String, dynamic> get _tries => _db['tries'];
   bool get hasBooks => _books.isNotEmpty;
 
   String pinKey(String pin) => sha256.convert(utf8.encode('${_db['salt']}:$pin')).toString();
@@ -333,7 +321,6 @@ class Store {
 
   Saved? saved(String key) => _books[key];
   Book book(String key) => Book.replay(_books[key]!.events);
-  bool taken(String pin) => _books.containsKey(pinKey(pin));
 
   /// Records a change in the book (and queues it for upload); returns the new state.
   Future<Book> record(String key, Map<String, dynamic> event) async {
@@ -363,53 +350,22 @@ class Store {
     return save();
   }
 
-  /// Seconds left before PINs may be tried again (0 = not locked).
-  int lockedFor() {
-    final until = (_tries['until'] ?? 0) as int;
-    return max(((until - DateTime.now().millisecondsSinceEpoch) / 1000).ceil(), 0);
-  }
-
-  /// Counts a wrong PIN (or a taken one at sign-up); returns tries left (0 = now locked).
-  Future<int> failed() async {
-    final t = DateTime.now().millisecondsSinceEpoch;
-    if ((_tries['last'] ?? 0) < t - lockMinutes * 60000) _tries['n'] = 0;
-    _tries['n'] = (_tries['n'] ?? 0) + 1;
-    _tries['last'] = t;
-    var left = maxTries - (_tries['n'] as int);
-    if (left <= 0) {
-      _tries['n'] = 0;
-      _tries['until'] = t + lockMinutes * 60000;
-      left = 0;
-    }
-    await save();
-    return left;
-  }
-
-  Future<void> clearTries() {
-    _db['tries'] = <String, dynamic>{'n': 0};
-    return save();
-  }
-
-  /// Opens the book of [pin], or null.
+  /// Opens this phone's book of [pin], or null. A book from an older version (random code)
+  /// moves to the PIN's code, so other phones with the same PIN reach it.
   Future<String?> unlock(String pin) async {
     final key = pinKey(pin);
-    if (!_books.containsKey(key)) return null;
-    await clearTries();
+    final s = _books[key];
+    if (s == null) return null;
+    if (s.sync != syncCodeFor(pin)) await join(key, syncCodeFor(pin));
     return key;
   }
 
-  Future<String> create(String name, String pin) async {
+  /// Starts the book of [pin] on this phone. If other phones already have it, the next sync
+  /// downloads their changes.
+  Future<String> create(String pin) async {
     final key = pinKey(pin);
-    final ev = startEvents(name);
-    _books[key] = Saved(hex(32), ev, {for (final e in ev) e['id']}, 0);
-    await save();
-    return key;
-  }
-
-  /// Moves the book to a new PIN; returns its new key.
-  Future<String> changePin(String oldKey, String newPin) async {
-    final key = pinKey(newPin);
-    _books[key] = _books.remove(oldKey)!;
+    final ev = startEvents();
+    _books[key] = Saved(syncCodeFor(pin), ev, {for (final e in ev) e['id']}, 0);
     await save();
     return key;
   }

@@ -10,6 +10,9 @@ import 'store.dart';
 /// Uploads queued events (only those in [only], when given) and downloads new ones.
 typedef SyncFn = Future<bool> Function(Store store, String key, {Set<String>? only});
 
+/// Whether the server has a book with this code; tests pass a fake.
+typedef ExistsFn = Future<bool> Function(String code);
+
 const _api = 'https://axncazensmjdqpczvzwf.supabase.co/rest/v1/rpc';
 const _key = 'sb_publishable_7hGIGHFa1mcWPMI8mEZKGw_-wgkkSYT';
 const _timeout = Duration(seconds: 15);
@@ -56,5 +59,17 @@ Future<bool> _round(http.Client c, Store store, String key, Set<String>? only) a
     s.after = r['seq'] as int;
     await store.save();
     if ((r['events'] as List).length < 1000) return changed;
+  }
+}
+
+/// Whether the server already has a book with this [code] (made on another phone).
+/// Throws when offline.
+Future<bool> bookExists(String code, {http.Client? client}) async {
+  final c = client ?? http.Client();
+  try {
+    final r = await _call(c, 'debts_pull', {'p_book': code, 'p_after': 0}) as Map;
+    return (r['events'] as List).isNotEmpty;
+  } finally {
+    if (client == null) c.close();
   }
 }

@@ -11,12 +11,10 @@ import 'theme.dart';
 class HomePage extends StatefulWidget {
   final Store store;
   final String bookKey;
-  final ValueChanged<String> onKey; // the book moved to a new PIN
   final VoidCallback onLock;
   /// Uploads and downloads the book; tests pass a fake.
   final SyncFn sync;
-  const HomePage({super.key, required this.store, required this.bookKey, required this.onKey,
-      required this.onLock, this.sync = syncBook});
+  const HomePage({super.key, required this.store, required this.bookKey, required this.onLock, this.sync = syncBook});
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -24,7 +22,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   static const every = Duration(seconds: 30);
   late Book _b = widget.store.book(widget.bookKey);
-  final _amount = TextEditingController(), _note = TextEditingController(), _code = TextEditingController();
+  final _amount = TextEditingController(), _note = TextEditingController();
   final _scroll = ScrollController(), _amountFocus = FocusNode();
   String? _shop;
   String _date = today();
@@ -44,7 +42,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
-    for (final c in [_amount, _note, _code]) {
+    for (final c in [_amount, _note]) {
       c.dispose();
     }
     _scroll.dispose();
@@ -186,7 +184,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               for (final s in shops) _shopCard(s),
               _shopsEditor(),
               _syncEditor(),
-              _pinEditor(),
               _archive(),
             ],
           ),
@@ -219,7 +216,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           const SizedBox(width: 14),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('📒 ${_b.name}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
               const Text('مجموع اللي علي هسه', style: TextStyle(color: AppColors.muted, fontSize: 13)),
               Text.rich(TextSpan(children: [
                 TextSpan(text: iqd(_b.total)),
@@ -390,7 +386,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Widget _syncEditor() {
     final n = _pending;
-    final code = _saved.sync;
     return Panel(
       child: ExpansionTile(
         title: Text.rich(TextSpan(children: [
@@ -426,56 +421,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   if (err != null) _say(err);
                 })),
           ]),
-          const SizedBox(height: 14),
-          const Text('كود الدفتر: اكتبه بتلفون ثاني حتى يصير نفس الدفتر بالتلفونين. لا تنطيه لأحد.',
-              style: TextStyle(color: AppColors.muted, fontSize: 13)),
-          const SizedBox(height: 6),
-          Row(children: [
-            Expanded(
-              child: SelectableText(showSyncCode(code), textDirection: TextDirection.ltr,
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, letterSpacing: 1)),
-            ),
-            Btn('📋 نسخ', kind: BtnKind.ghost, onTap: () async {
-              await Clipboard.setData(ClipboardData(text: code));
-              _say('✔ انسخ الكود');
-            }),
-          ]),
-          const SizedBox(height: 14),
-          const Text('عندك الدفتر بتلفون ثاني؟ اكتب كوده هنا:', style: TextStyle(color: AppColors.muted, fontSize: 13)),
-          const SizedBox(height: 6),
-          Row(children: [
-            Expanded(
-              child: TextField(controller: _code, textDirection: TextDirection.ltr,
-                  decoration: const InputDecoration(hintText: 'xxxx-xxxx-...')),
-            ),
-            const SizedBox(width: 8),
-            Btn('ربط', onTap: () async {
-              final c = parseSyncCode(_code.text);
-              if (c == null) return _say('الكود لازم 32 حرف/رقم');
-              if (c == code) return _say('هذا كود نفس الدفتر');
-              if (!await confirm(context, 'تربط هذا الدفتر بالكود؟ تسجيلات هذا التلفون راح تندمج ويا الدفتر الثاني.')) return;
-              await widget.store.join(widget.bookKey, c);
-              _code.clear();
-              setState(() {});
-              await _sync(manual: true);
-              if (mounted) _say(_offline ? 'انربط. راح يتزامن أول ما يرجع الإنترنت' : '✔ انربط وتزامن');
-            }),
-          ]),
           const SizedBox(height: 6),
         ],
       ),
     );
   }
-
-  Widget _pinEditor() => Panel(child: _PinEditor(onChange: (oldPin, newPin) async {
-        final s = widget.store;
-        if (!validPin(oldPin) || s.pinKey(oldPin) != widget.bookKey) return 'الرمز الحالي غلط';
-        if (!validPin(newPin)) return 'الرمز الجديد لازم 6 أرقام';
-        if (s.taken(newPin)) return 'هذا الرمز مستخدم، اختار رمز غيره';
-        widget.onKey(await s.changePin(widget.bookKey, newPin));
-        _say('✔ تغيّر الرمز');
-        return null;
-      }));
 
   Widget _archive() => Panel(
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -538,61 +488,5 @@ class _ShopRowState extends State<_ShopRow> {
             Btn('🗑', kind: BtnKind.ghost, onTap: widget.onRemove),
           ],
         ]),
-      );
-}
-
-class _PinEditor extends StatefulWidget {
-  /// Returns an error message, or null when the PIN changed.
-  final Future<String?> Function(String oldPin, String newPin) onChange;
-  const _PinEditor({required this.onChange});
-  @override
-  State<_PinEditor> createState() => _PinEditorState();
-}
-
-class _PinEditorState extends State<_PinEditor> {
-  final _old = TextEditingController(), _new = TextEditingController();
-  String? _msg;
-
-  @override
-  void dispose() {
-    _old.dispose();
-    _new.dispose();
-    super.dispose();
-  }
-
-  Widget _field(TextEditingController c, String hint) => TextField(
-        controller: c,
-        obscureText: true,
-        keyboardType: TextInputType.number,
-        maxLength: 6,
-        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹]'))],
-        decoration: InputDecoration(hintText: hint, counterText: ''),
-      );
-
-  @override
-  Widget build(BuildContext context) => ExpansionTile(
-        title: const Text('🔑 تغيير الرمز السري', style: TextStyle(fontWeight: FontWeight.w800)),
-        children: [
-          if (_msg != null) ...[Flash(_msg!), const SizedBox(height: 8)],
-          Row(children: [
-            Expanded(child: _field(_old, 'الرمز الحالي')),
-            const SizedBox(width: 8),
-            Expanded(child: _field(_new, 'الرمز الجديد (6 أرقام)')),
-          ]),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: Btn('تغيير', onTap: () async {
-              final err = await widget.onChange(latinDigits(_old.text).trim(), latinDigits(_new.text).trim());
-              if (!mounted) return;
-              setState(() => _msg = err);
-              if (err == null) {
-                _old.clear();
-                _new.clear();
-              }
-            }),
-          ),
-          const SizedBox(height: 6),
-        ],
       );
 }

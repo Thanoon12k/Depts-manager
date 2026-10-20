@@ -33,13 +33,28 @@ class FakeServer {
   });
 }
 
+/// A phone with its own storage and the book of [pin].
 Future<(Store, String)> phone(String pin) async {
+  SharedPreferences.setMockInitialValues({});
   final s = await Store.load();
-  return (s, await s.create('ذنون', pin));
+  return (s, await s.create(pin));
 }
 
 Map<String, dynamic> buy(String shop, int n) => {'t': 'buy', 'shop': shop, 'amount': n, 'date': today(), 'note': ''};
 Map<String, dynamic> pay(String shop, int n) => {'t': 'pay', 'shop': shop, 'amount': n, 'date': today(), 'note': ''};
+
+/// The app wired to [server] instead of the internet.
+DebtsApp app(Store store, FakeServer server) => DebtsApp(
+      store: store,
+      sync: (s, k, {only}) => syncBook(s, k, only: only, client: server.client),
+      exists: (code) => bookExists(code, client: server.client),
+    );
+
+Future<void> openPin(WidgetTester t, String pin) async {
+  await t.enterText(find.byType(TextField).first, pin);
+  await t.tap(find.text('فتح'));
+  await t.pumpAndSettle();
+}
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -50,11 +65,14 @@ void main() {
     expect(parseAmount('0'), null);
     expect(parseAmount('abc'), null);
     expect(iqd(1234567), '1,234,567');
-    expect(parseSyncCode(showSyncCode('0123456789abcdef0123456789abcdef')), '0123456789abcdef0123456789abcdef');
+    expect(validPin('١٢٣٤'), false); // the lock page turns Arabic digits to Latin first
+    expect(validPin(latinDigits('١٢٣٤')), true);
+    expect(syncCodeFor('1234'), syncCodeFor('1234'));
+    expect(syncCodeFor('1234'), isNot(syncCodeFor('4321')));
   });
 
   test('paying a shop off archives it and keeps overpayment as credit', () async {
-    final (s, k) = await phone('111111');
+    final (s, k) = await phone('1111');
     await s.record(k, buy('d0', 10000));
     await s.record(k, buy('d0', 5000));
     var b = await s.record(k, pay('d0', 4000));
@@ -71,74 +89,90 @@ void main() {
 
   test('offline changes wait in the queue and upload when the internet is back', () async {
     final server = FakeServer()..online = false;
-    final (s, k) = await phone('111111');
+    final (s, k) = await phone('1111');
     await s.record(k, buy('d1', 7000));
     await expectLater(syncBook(s, k, client: server.client), throwsA(isA<http.ClientException>()));
-    expect(s.saved(k)!.pending.length, 6); // book + 4 shops + the purchase
+    expect(s.saved(k)!.pending.length, 5); // 4 shops + the purchase
     server.online = true;
     await syncBook(s, k, client: server.client);
     expect(s.saved(k)!.pending, isEmpty);
-    expect(server.rows.length, 6);
+    expect(server.rows.length, 5);
     await syncBook(s, k, client: server.client); // nothing sent twice
-    expect(server.rows.length, 6);
+    expect(server.rows.length, 5);
   });
 
-  test('a second phone with the book code gets the same book, both ways', () async {
+  test('a second phone with the same PIN gets the same book, both ways', () async {
     final server = FakeServer();
-    final (a, ka) = await phone('111111');
+    final (a, ka) = await phone('1111');
     await a.record(ka, buy('d2', 9000));
+    await a.record(ka, {'t': 'shop', 'shop': 'd0', 'name': 'أبو علي'});
     await syncBook(a, ka, client: server.client);
 
-    final (b, kb) = await phone('222222');
-    await b.join(kb, a.saved(ka)!.sync);
+    final (b, kb) = await phone('1111');
+    expect(b.saved(kb)!.sync, a.saved(ka)!.sync);
     await syncBook(b, kb, client: server.client);
+    expect(server.rows.length, 6); // the default shops are stored once
     expect(b.book(kb).shopBalance('d2'), 9000);
-    expect(b.book(kb).shops.length, 4); // default shops are not doubled
+    expect(b.book(kb).shops.length, 4);
+    expect(b.book(kb).shops.firstWhere((s) => s.id == 'd0').name, 'أبو علي'); // the rename wins
 
     await b.record(kb, pay('d2', 9000));
     await syncBook(b, kb, client: server.client);
     expect(await syncBook(a, ka, client: server.client), true);
     expect(a.book(ka).shopBalance('d2'), 0);
     expect(a.book(ka).archive.single.id, b.book(kb).archive.single.id);
+
+    final (c, kc) = await phone('2222'); // another PIN is another book
+    await syncBook(c, kc, client: server.client);
+    expect(c.book(kc).shopBalance('d2'), 0);
+    expect(c.book(kc).archive, isEmpty);
+  });
+
+  test('a book from an older version moves to its PIN code when opened', () async {
+    final server = FakeServer();
+    final (a, ka) = await phone('123456');
+    a.saved(ka)!.sync = '0123456789abcdef0123456789abcdef'; // the random code older versions made
+    await a.record(ka, buy('d1', 4000));
+    expect(await a.unlock('123456'), ka);
+    expect(a.saved(ka)!.sync, syncCodeFor('123456'));
+    await syncBook(a, ka, client: server.client);
+    expect(await bookExists(syncCodeFor('123456'), client: server.client), true);
   });
 
   test('one queued operation can be uploaded on its own', () async {
     final server = FakeServer();
-    final (s, k) = await phone('111111');
+    final (s, k) = await phone('1111');
     await s.record(k, buy('d1', 7000));
     final last = s.saved(k)!.queue.firstWhere((e) => e['t'] == 'buy');
     await syncBook(s, k, only: {last['id']}, client: server.client);
     expect(server.rows.single.event['amount'], 7000);
-    expect(s.saved(k)!.pending.length, 5);
+    expect(s.saved(k)!.pending.length, 4);
     await syncBook(s, k, only: {}, client: server.client); // download only
-    expect(s.saved(k)!.pending.length, 5);
+    expect(s.saved(k)!.pending.length, 4);
   });
 
   testWidgets('manual mode: operations stay queued until pushed from the pending list', (t) async {
     t.view.physicalSize = const Size(1080, 2400); // a phone screen, so the whole list shows
     addTearDown(t.view.reset);
     final server = FakeServer();
-    final store = await Store.load();
-    final key = await store.create('ذنون', '123456');
+    final (store, key) = await phone('1234');
     store.saved(key)!.auto = false;
     await store.record(key, buy('d0', 2500));
-    await t.pumpWidget(DebtsApp(store: store, sync: (s, k, {only}) => syncBook(s, k, only: only, client: server.client)));
-    await t.enterText(find.byType(TextField).first, '123456');
-    await t.tap(find.text('فتح'));
-    await t.pumpAndSettle();
+    await t.pumpWidget(app(store, server));
+    await openPin(t, '1234');
     expect(server.rows, isEmpty); // nothing went up by itself
-    await t.tap(find.text('⏳ 6'));
+    await t.tap(find.text('⏳ 5'));
     await t.pumpAndSettle();
-    expect(find.text('⏳ العمليات المعلقة (6)'), findsOneWidget);
+    expect(find.text('⏳ العمليات المعلقة (5)'), findsOneWidget);
     await t.scrollUntilVisible(find.textContaining('🛒 مسواك 2,500 د.ع · دكان أحمد أنس'), 200);
     expect(find.textContaining('🛒 مسواك 2,500 د.ع · دكان أحمد أنس'), findsOneWidget);
     await t.tap(find.text('⬆ ارفع').first);
     await t.pumpAndSettle();
     expect(server.rows.length, 1);
-    expect(find.text('⏳ العمليات المعلقة (5)'), findsOneWidget);
-    await t.tap(find.text('⬆ ارفع الكل (5)'));
+    expect(find.text('⏳ العمليات المعلقة (4)'), findsOneWidget);
+    await t.tap(find.text('⬆ ارفع الكل (4)'));
     await t.pumpAndSettle();
-    expect(server.rows.length, 6);
+    expect(server.rows.length, 5);
     expect(find.textContaining('ماكو شي معلق'), findsOneWidget);
     await t.pumpWidget(const SizedBox());
   });
@@ -169,32 +203,43 @@ void main() {
     expect(s.saved('k')!.pending.length, 5);
   });
 
-  testWidgets('first launch creates a book, then the PIN opens it', (t) async {
-    final store = await Store.load();
-    final server = FakeServer()..online = false;
-    await t.pumpWidget(DebtsApp(store: store, sync: (s, k, {only}) => syncBook(s, k, only: only, client: server.client)));
-    expect(find.text('دفتر جديد'), findsOneWidget);
-    final fields = find.byType(TextField);
-    await t.enterText(fields.at(0), 'ذنون');
-    await t.enterText(fields.at(1), '123456');
-    await t.enterText(fields.at(2), '123456');
-    await t.tap(find.text('إنشاء وفتح'));
+  testWidgets('a new PIN asks before making a book; the same PIN on another phone opens it', (t) async {
+    final server = FakeServer();
+    await t.pumpWidget(app(await Store.load(), server));
+    await openPin(t, '12');
+    expect(find.text('الرمز 4 أرقام'), findsOneWidget);
+    await openPin(t, '٤٤٤٤'); // Arabic digits work too
+    expect(find.textContaining('ماكو دفتر بهذا الرمز'), findsOneWidget);
+    await t.tap(find.text('نعم'));
     await t.pumpAndSettle();
-    expect(find.text('📒 ذنون'), findsOneWidget);
-    expect(find.text('⏳ 5'), findsOneWidget); // offline: the new book waits in the queue
+    expect(find.text('مجموع اللي علي هسه'), findsOneWidget);
+    expect(find.text('☁️ ✔'), findsOneWidget); // uploaded right away
+    await t.pumpWidget(const SizedBox()); // stop the sync timer
+
+    SharedPreferences.setMockInitialValues({}); // another phone
+    await t.pumpWidget(app(await Store.load(), server));
+    await openPin(t, '4444');
+    expect(find.textContaining('ماكو دفتر'), findsNothing); // found on the server: opens directly
+    expect(find.text('مجموع اللي علي هسه'), findsOneWidget);
+    expect(server.rows.length, 4); // still one copy of the book
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('offline, a new PIN still opens after asking, and its changes wait', (t) async {
+    final server = FakeServer()..online = false;
+    await t.pumpWidget(app(await Store.load(), server));
+    await openPin(t, '1234');
+    expect(find.textContaining('ماكو إنترنت حتى أدور'), findsOneWidget);
+    await t.tap(find.text('نعم'));
+    await t.pumpAndSettle();
+    expect(find.text('⏳ 4'), findsOneWidget);
     await t.tap(find.text('🔒 قفل'));
     await t.pumpAndSettle();
-    await t.enterText(find.byType(TextField).first, '000000');
-    await t.tap(find.text('فتح'));
-    await t.pumpAndSettle();
-    expect(find.textContaining('الرمز غلط'), findsOneWidget);
     server.online = true;
-    await t.enterText(find.byType(TextField).first, '123456');
-    await t.tap(find.text('فتح'));
-    await t.pumpAndSettle();
-    expect(find.text('☁️ ✔'), findsOneWidget); // back online: uploaded
-    expect(server.rows.length, 5);
-    await t.pumpWidget(const SizedBox()); // stop the sync timer
+    await openPin(t, '1234'); // on this phone now: no question
+    expect(find.text('☁️ ✔'), findsOneWidget);
+    expect(server.rows.length, 4);
+    await t.pumpWidget(const SizedBox());
   });
 
   testWidgets('the app opens even when a saved book is unreadable', (t) async {
@@ -205,8 +250,6 @@ void main() {
     expect(find.text('دفتر الدين'), findsOneWidget); // the splash, not an empty screen
     await t.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
     await t.pumpAndSettle();
-    expect(find.text('دفتر جديد'), findsOneWidget);
-    final saved = jsonDecode((await SharedPreferences.getInstance()).getString('debts_db')!);
-    expect(saved['broken'], isNull); // kept aside only in memory until the next save
+    expect(find.text('الرمز (4 أرقام)'), findsOneWidget);
   });
 }

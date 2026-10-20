@@ -87,7 +87,8 @@ class _BootState extends State<Boot> {
 class DebtsApp extends StatelessWidget {
   final Store store;
   final SyncFn sync;
-  const DebtsApp({super.key, required this.store, this.sync = syncBook});
+  final ExistsFn exists;
+  const DebtsApp({super.key, required this.store, this.sync = syncBook, this.exists = bookExists});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -97,7 +98,7 @@ class DebtsApp extends StatelessWidget {
         supportedLocales: const [Locale('ar', 'IQ')],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
         theme: appTheme(),
-        home: Gate(store: store, sync: sync),
+        home: Gate(store: store, sync: sync, exists: exists),
       );
 }
 
@@ -105,7 +106,8 @@ class DebtsApp extends StatelessWidget {
 class Gate extends StatefulWidget {
   final Store store;
   final SyncFn sync;
-  const Gate({super.key, required this.store, required this.sync});
+  final ExistsFn exists;
+  const Gate({super.key, required this.store, required this.sync, required this.exists});
   @override
   State<Gate> createState() => _GateState();
 }
@@ -141,129 +143,96 @@ class _GateState extends State<Gate> with WidgetsBindingObserver {
     final key = _key;
     if (key != null) {
       return HomePage(store: widget.store, bookKey: key, sync: widget.sync,
-          onKey: (k) => setState(() => _key = k), onLock: () => setState(() => _key = null));
+          onLock: () => setState(() => _key = null));
     }
-    return LockPage(store: widget.store, onOpen: (k) => setState(() => _key = k));
+    return LockPage(store: widget.store, exists: widget.exists, onOpen: (k) => setState(() => _key = k));
   }
 }
 
+/// One field: the book's PIN. The same PIN opens the same book on any phone.
 class LockPage extends StatefulWidget {
   final Store store;
+  final ExistsFn exists;
   final ValueChanged<String> onOpen;
-  const LockPage({super.key, required this.store, required this.onOpen});
+  const LockPage({super.key, required this.store, required this.exists, required this.onOpen});
   @override
   State<LockPage> createState() => _LockPageState();
 }
 
 class _LockPageState extends State<LockPage> {
-  final _name = TextEditingController(), _pin = TextEditingController(), _pin2 = TextEditingController();
-  late bool _signup = !widget.store.hasBooks;
+  final _pin = TextEditingController();
+  bool _busy = false;
   String? _msg;
 
   @override
   void dispose() {
-    for (final c in [_name, _pin, _pin2]) {
-      c.dispose();
-    }
+    _pin.dispose();
     super.dispose();
   }
 
-  String _read(TextEditingController c) => latinDigits(c.text).trim();
-
   Future<void> _submit() async {
+    if (_busy) return;
     final s = widget.store;
-    if (s.lockedFor() > 0) return setState(() {});
-    final pin = _read(_pin);
-    if (_signup) {
-      final name = _name.text.trim();
-      if (name.isEmpty || !validPin(pin) || pin != _read(_pin2)) {
-        return setState(() => _msg = 'اكتب اسمك، والرمز 6 أرقام ونفسه بالخانتين');
-      }
-      if (s.taken(pin)) {
-        final left = await s.failed();
-        return setState(() => _msg = left > 0 ? 'هذا الرمز مستخدم، اختار رمز غيره' : null);
-      }
-      widget.onOpen(await s.create(name.length > 40 ? name.substring(0, 40) : name, pin));
+    final pin = latinDigits(_pin.text).trim();
+    final key = RegExp(r'^\d{4,6}$').hasMatch(pin) ? await s.unlock(pin) : null; // already on this phone
+    if (key != null) return widget.onOpen(key);
+    if (!validPin(pin)) return setState(() => _msg = 'الرمز 4 أرقام');
+    setState(() {
+      _busy = true;
+      _msg = null;
+    });
+    bool? found; // null: no internet to check
+    try {
+      found = await widget.exists(syncCodeFor(pin)).timeout(const Duration(seconds: 15));
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (found != true &&
+        !await confirm(context, found == false
+            ? 'ماكو دفتر بهذا الرمز. تسوي دفتر جديد بيه؟'
+            : 'ماكو إنترنت حتى أدور على الدفتر. تفتحه على هذا التلفون؟ إذا هو موجود بتلفون ثاني، ينزل أول ما يرجع الإنترنت.')) {
       return;
     }
-    final key = validPin(pin) ? await s.unlock(pin) : null;
-    if (key != null) return widget.onOpen(key);
-    final left = await s.failed();
-    _pin.clear();
-    setState(() => _msg = left > 0 ? 'الرمز غلط (باقي $left محاولات)' : null);
+    widget.onOpen(await s.create(pin));
   }
 
-  Widget _pinField(TextEditingController c, String hint, {bool focus = false}) => Padding(
-        padding: const EdgeInsets.only(top: 10),
-        child: TextField(
-          controller: c,
-          autofocus: focus,
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          maxLength: 6,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 22, letterSpacing: 6),
-          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹]'))],
-          decoration: InputDecoration(hintText: hint, counterText: '',
-              hintStyle: const TextStyle(fontSize: 16, letterSpacing: 0)),
-          onSubmitted: (_) => _submit(),
-        ),
-      );
-
   @override
-  Widget build(BuildContext context) {
-    final wait = widget.store.lockedFor();
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 380),
-              child: Panel(
-                child: Column(children: [
-                  const Text('🔒', style: TextStyle(fontSize: 48)),
-                  if (wait > 0) ...[
-                    Flash('محاولات غلط كثيرة. جرب بعد ${wait ~/ 60 + 1} دقيقة.'),
-                    const SizedBox(height: 10),
-                    TextButton(onPressed: () => setState(() {}), child: const Text('تحديث')),
-                  ] else ...[
-                    Text(_signup ? 'دفتر جديد' : 'دفتر الدين',
-                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-                    if (_signup)
-                      const Text('كل رمز سري إله دفتره الخاص: دكاكينه ومسواكه وأرشيفه',
-                          textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted)),
+  Widget build(BuildContext context) => Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 380),
+                child: Panel(
+                  child: Column(children: [
+                    const Text('📒', style: TextStyle(fontSize: 48)),
+                    const Text('دفتر الدين', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                    const Text('اكتب رمز دفترك. نفس الرمز يفتح نفس الدفتر بأي موبايل.',
+                        textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted)),
                     if (_msg != null) ...[const SizedBox(height: 10), Flash(_msg!)],
-                    if (_signup) ...[
-                      const SizedBox(height: 10),
-                      TextField(controller: _name, autofocus: true, maxLength: 40,
-                          textAlign: TextAlign.center,
-                          decoration: const InputDecoration(hintText: 'اسمك', counterText: '')),
-                      _pinField(_pin, 'رمز من 6 أرقام'),
-                      _pinField(_pin2, 'أعد الرمز'),
-                    ] else
-                      _pinField(_pin, 'الرمز السري', focus: true),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _pin,
+                      autofocus: true,
+                      obscureText: true,
+                      keyboardType: TextInputType.number,
+                      maxLength: 6, // books from older versions may have 6 digits
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 26, letterSpacing: 10),
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹]'))],
+                      decoration: const InputDecoration(hintText: 'الرمز (4 أرقام)', counterText: '',
+                          hintStyle: TextStyle(fontSize: 16, letterSpacing: 0)),
+                      onSubmitted: (_) => _submit(),
+                    ),
                     const SizedBox(height: 14),
                     SizedBox(width: double.infinity,
-                        child: Btn(_signup ? 'إنشاء وفتح' : 'فتح', onTap: _submit)),
-                    const SizedBox(height: 8),
-                    if (!_signup || widget.store.hasBooks)
-                      TextButton(
-                        onPressed: () => setState(() {
-                          _signup = !_signup;
-                          _msg = null;
-                          _pin.clear();
-                          _pin2.clear();
-                        }),
-                        child: Text(_signup ? 'عندي دفتر، أفتحه بالرمز' : '➕ دفتر جديد برمز جديد'),
-                      ),
-                  ],
-                ]),
+                        child: _busy ? const Center(child: CircularProgressIndicator()) : Btn('فتح', onTap: _submit)),
+                  ]),
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
-  }
+      );
 }
