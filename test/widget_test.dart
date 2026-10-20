@@ -65,8 +65,9 @@ void main() {
     expect(parseAmount('0'), null);
     expect(parseAmount('abc'), null);
     expect(iqd(1234567), '1,234,567');
-    expect(validPin('١٢٣٤'), false); // the lock page turns Arabic digits to Latin first
-    expect(validPin(latinDigits('١٢٣٤')), true);
+    expect(validPin('١٢٣٤٥٦'), false); // the lock page turns Arabic digits to Latin first
+    expect(validPin(latinDigits('١٢٣٤٥٦')), true);
+    expect(validPin('1234'), false);
     expect(syncCodeFor('1234'), syncCodeFor('1234'));
     expect(syncCodeFor('1234'), isNot(syncCodeFor('4321')));
   });
@@ -155,11 +156,11 @@ void main() {
     t.view.physicalSize = const Size(1080, 2400); // a phone screen, so the whole list shows
     addTearDown(t.view.reset);
     final server = FakeServer();
-    final (store, key) = await phone('1234');
+    final (store, key) = await phone('123456');
     store.saved(key)!.auto = false;
     await store.record(key, buy('d0', 2500));
     await t.pumpWidget(app(store, server));
-    await openPin(t, '1234');
+    await openPin(t, '123456');
     expect(server.rows, isEmpty); // nothing went up by itself
     await t.tap(find.text('⏳ 5'));
     await t.pumpAndSettle();
@@ -207,8 +208,8 @@ void main() {
     final server = FakeServer();
     await t.pumpWidget(app(await Store.load(), server));
     await openPin(t, '12');
-    expect(find.text('الرمز 4 أرقام'), findsOneWidget);
-    await openPin(t, '٤٤٤٤'); // Arabic digits work too
+    expect(find.text('الرمز 6 أرقام'), findsOneWidget);
+    await openPin(t, '٤٤٤٤٤٤'); // Arabic digits work too
     expect(find.textContaining('ماكو دفتر بهذا الرمز'), findsOneWidget);
     await t.tap(find.text('نعم'));
     await t.pumpAndSettle();
@@ -218,7 +219,7 @@ void main() {
 
     SharedPreferences.setMockInitialValues({}); // another phone
     await t.pumpWidget(app(await Store.load(), server));
-    await openPin(t, '4444');
+    await openPin(t, '444444');
     expect(find.textContaining('ماكو دفتر'), findsNothing); // found on the server: opens directly
     expect(find.text('مجموع اللي علي هسه'), findsOneWidget);
     expect(server.rows.length, 4); // still one copy of the book
@@ -228,7 +229,7 @@ void main() {
   testWidgets('offline, a new PIN still opens after asking, and its changes wait', (t) async {
     final server = FakeServer()..online = false;
     await t.pumpWidget(app(await Store.load(), server));
-    await openPin(t, '1234');
+    await openPin(t, '123456');
     expect(find.textContaining('ماكو إنترنت حتى أدور'), findsOneWidget);
     await t.tap(find.text('نعم'));
     await t.pumpAndSettle();
@@ -236,9 +237,25 @@ void main() {
     await t.tap(find.text('🔒 قفل'));
     await t.pumpAndSettle();
     server.online = true;
-    await openPin(t, '1234'); // on this phone now: no question
+    await openPin(t, '123456'); // on this phone now: no question
     expect(find.text('☁️ ✔'), findsOneWidget);
     expect(server.rows.length, 4);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a 4-digit book from version 1.5 still opens on another phone; no new ones', (t) async {
+    final server = FakeServer();
+    final (a, ka) = await phone('4321'); // made by version 1.5
+    await a.record(ka, buy('d1', 3000));
+    await syncBook(a, ka, client: server.client);
+
+    SharedPreferences.setMockInitialValues({});
+    await t.pumpWidget(app(await Store.load(), server));
+    await openPin(t, '9999'); // not on the server: 4 digits can't start a book
+    expect(find.text('الرمز 6 أرقام'), findsOneWidget);
+    await openPin(t, '4321');
+    expect(find.text('مجموع اللي علي هسه'), findsOneWidget);
+    expect(find.textContaining('3,000', findRichText: true), findsWidgets); // its purchase came down
     await t.pumpWidget(const SizedBox());
   });
 
@@ -250,6 +267,6 @@ void main() {
     expect(find.text('دفتر الدين'), findsOneWidget); // the splash, not an empty screen
     await t.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
     await t.pumpAndSettle();
-    expect(find.text('الرمز (4 أرقام)'), findsOneWidget);
+    expect(find.text('الرمز (6 أرقام)'), findsOneWidget);
   });
 }

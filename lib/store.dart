@@ -8,7 +8,7 @@
 // it in time order. New events wait in a queue on the phone and are uploaded whenever there is
 // internet (see sync.dart), so the same book can be kept on several phones.
 //
-// A 4-digit PIN is the book: the same PIN opens the same book on every phone, because the book's
+// A 6-digit PIN is the book: the same PIN opens the same book on every phone, because the book's
 // code on the server is derived from it. Different PINs keep separate books.
 import 'dart:convert';
 import 'dart:math';
@@ -49,8 +49,8 @@ int? parseAmount(String raw) {
   return n > 0 && n < 10000000000 ? n : null;
 }
 
-/// A new book's PIN: 4 digits. (Books made by older versions may have 6.)
-bool validPin(String p) => RegExp(r'^\d{4}$').hasMatch(p);
+/// A new book's PIN: 6 digits. (Version 1.5 made 4-digit books; those still open.)
+bool validPin(String p) => RegExp(r'^\d{6}$').hasMatch(p);
 
 /// The book's code on the server for [pin]: the same on every phone.
 String syncCodeFor(String pin) => sha256.convert(utf8.encode('debts-book:$pin')).toString().substring(0, 32);

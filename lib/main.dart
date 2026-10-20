@@ -176,7 +176,8 @@ class _LockPageState extends State<LockPage> {
     final pin = latinDigits(_pin.text).trim();
     final key = RegExp(r'^\d{4,6}$').hasMatch(pin) ? await s.unlock(pin) : null; // already on this phone
     if (key != null) return widget.onOpen(key);
-    if (!validPin(pin)) return setState(() => _msg = 'الرمز 4 أرقام');
+    final old = RegExp(r'^\d{4}$').hasMatch(pin); // 4-digit books from version 1.5 open, but no new ones
+    if (!validPin(pin) && !old) return setState(() => _msg = 'الرمز 6 أرقام');
     setState(() {
       _busy = true;
       _msg = null;
@@ -187,6 +188,9 @@ class _LockPageState extends State<LockPage> {
     } catch (_) {}
     if (!mounted) return;
     setState(() => _busy = false);
+    if (old && found != true) {
+      return setState(() => _msg = found == null ? 'ماكو إنترنت حتى أدور على الدفتر' : 'الرمز 6 أرقام');
+    }
     if (found != true &&
         !await confirm(context, found == false
             ? 'ماكو دفتر بهذا الرمز. تسوي دفتر جديد بيه؟'
@@ -217,11 +221,11 @@ class _LockPageState extends State<LockPage> {
                       autofocus: true,
                       obscureText: true,
                       keyboardType: TextInputType.number,
-                      maxLength: 6, // books from older versions may have 6 digits
+                      maxLength: 6,
                       textAlign: TextAlign.center,
                       style: const TextStyle(fontSize: 26, letterSpacing: 10),
                       inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹]'))],
-                      decoration: const InputDecoration(hintText: 'الرمز (4 أرقام)', counterText: '',
+                      decoration: const InputDecoration(hintText: 'الرمز (6 أرقام)', counterText: '',
                           hintStyle: TextStyle(fontSize: 16, letterSpacing: 0)),
                       onSubmitted: (_) => _submit(),
                     ),
