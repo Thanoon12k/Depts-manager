@@ -87,6 +87,24 @@ class Shop {
   Shop(this.id, this.name);
 }
 
+class PersonalEntry {
+  final int change; // Positive when I receive money, negative when I give it.
+  final String date, note;
+  PersonalEntry(this.change, this.date, this.note);
+}
+
+class PersonalAccount {
+  String name = 'حساب خاص';
+  int outstanding = 0;
+  final entries = <PersonalEntry>[];
+}
+
+class MonthlyBalance {
+  final String month;
+  final int general, personal, credit;
+  MonthlyBalance(this.month, this.general, this.personal, this.credit);
+}
+
 class Closed {
   final String id, shop, shopName, from, to, closed;
   final int bought, paid;
@@ -132,21 +150,64 @@ class Book {
   final List<Entry> entries = [];
   final List<Closed> archive = []; // newest first
 
+  final people = <String, PersonalAccount>{};
+  final months = <MonthlyBalance>[];
+
   Book.replay(Iterable<Map<String, dynamic>> events) {
     final names = <String, String>{}; // last known name of every shop, removed ones too
+    String? month;
+    void closeMonth(String label) {
+      var owed = 0, credit = 0;
+      for (final person in people.values) {
+        owed += max(0, person.outstanding);
+        credit += max(0, -person.outstanding);
+      }
+      months.add(MonthlyBalance(label, total, owed, credit));
+    }
+    void advance(String next) {
+      if (month == null) { month = next; return; }
+      var cursor = DateTime.parse('${month!}-01');
+      final end = DateTime.parse('$next-01');
+      while (cursor.isBefore(end)) {
+        closeMonth(ymd(cursor).substring(0, 7));
+        cursor = DateTime(cursor.year, cursor.month + 1);
+      }
+      month = next;
+    }
+    final current = today().substring(0, 7);
     for (final e in [...events]..sort(byTime)) {
       try {
+        final stamp = e['at'] as String;
+        if (stamp.length >= 7 && DateTime.tryParse('${stamp.substring(0, 7)}-01') != null &&
+            !stamp.startsWith('0000') && stamp.substring(0, 7).compareTo(current) <= 0) {
+          advance(stamp.substring(0, 7));
+        }
         _apply(e, names);
       } on TypeError {
         // a malformed event (e.g. from a newer app version): skip it
       }
     }
+    advance(current);
+    closeMonth(current);
   }
 
   void _apply(Map<String, dynamic> e, Map<String, String> names) {
     final shopId = e['shop'] as String?;
     Shop? shop = shops.where((s) => s.id == shopId).firstOrNull;
     switch (e['t']) {
+      case 'person':
+        final id = e['person'] as String;
+        final name = e['name'] as String;
+        people.putIfAbsent(id, PersonalAccount.new).name = name;
+      case 'receive' || 'give':
+        final id = e['person'] as String;
+        final amount = e['amount'] as int;
+        if (amount <= 0) return;
+        final entry = PersonalEntry(e['t'] == 'receive' ? amount : -amount,
+            e['date'] as String, e['note'] as String? ?? '');
+        final account = people.putIfAbsent(id, PersonalAccount.new);
+        account.entries.add(entry);
+        account.outstanding += entry.change;
       case 'book':
         name = e['name'];
       case 'shop':

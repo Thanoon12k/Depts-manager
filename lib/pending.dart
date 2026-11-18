@@ -40,6 +40,11 @@ class _PendingPageState extends State<PendingPage> {
       return '${iqd(x['amount'] as int)} د.ع · ${shop(x['shop'])}${note.isEmpty ? '' : ' · $note'}';
     }
     switch (e['t']) {
+      case 'person':
+        return 'حساب خاص · ${e['name']}';
+      case 'receive' || 'give':
+        final name = b.people[e['person']]?.name ?? 'حساب خاص';
+        return "${e['t'] == 'receive' ? 'أخذت من' : 'انطيت إلى'} $name · ${iqd(e['amount'])} د.ع";
       case 'book':
         return '📒 اسم الدفتر: ${e['name']}';
       case 'shop':

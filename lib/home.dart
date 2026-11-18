@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'pending.dart';
+import 'accounts.dart';
 import 'store.dart';
 import 'sync.dart';
 import 'theme.dart';
@@ -25,6 +26,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final _amount = TextEditingController(), _note = TextEditingController();
   final _scroll = ScrollController(), _amountFocus = FocusNode();
   String? _shop;
+  String? _page, _person;
+
+  void _back() => setState(() {
+    if (_person != null) { _person = null; } else { _page = null; }
+  });
   String _date = today();
   bool _syncing = false, _offline = false;
   String? _lastSync;
@@ -96,6 +102,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _record(Map<String, dynamic> event) async {
     final b = await widget.store.record(widget.bookKey, event);
+    if (!mounted) return;
     setState(() => _b = b);
     _sync();
   }
@@ -150,6 +157,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (_page != null) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) { if (!didPop) _back(); },
+        child: Scaffold(
+          appBar: AppBar(leading: BackButton(onPressed: _back),
+              title: Text(_b.people[_person]?.name ?? _page!)),
+          body: SafeArea(child: _page == 'الحسابات'
+              ? AccountsSummary(book: _b)
+              : PersonalLists(book: _b, selected: _person, record: _record,
+                  select: (id) => setState(() => _person = id))),
+        ),
+      );
+    }
     final shops = [..._b.shops]..sort((a, b) => _b.shopBalance(b.id).compareTo(_b.shopBalance(a.id)));
     return Scaffold(
       appBar: AppBar(
@@ -180,6 +201,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
               _hero(),
+              Row(children: [
+                for (final title in ['قوائم خاصة', 'الحسابات'])
+                  Expanded(child: Padding(padding: const EdgeInsets.all(3),
+                    child: Btn(title, kind: BtnKind.ghost, onTap: () => setState(() => _page = title)))),
+              ]),
+              const SizedBox(height: 10),
               _form(),
               for (final s in shops) _shopCard(s),
               _shopsEditor(),
