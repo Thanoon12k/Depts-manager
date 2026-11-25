@@ -102,10 +102,10 @@ class PersonalAccount {
 class ShoppingItem {
   final String id;
   String month, name, note;
-  int quantity, price, position;
+  int quantity, position;
   bool done;
   ShoppingItem(this.id, this.month, this.name, this.note, this.quantity,
-      this.price, this.position, this.done);
+      this.position, this.done);
 }
 
 class MonthlyBalance {
@@ -233,7 +233,7 @@ class Book {
         final id = e['item'] as String;
         shopping.putIfAbsent(id, () => ShoppingItem(id, e['month'] as String,
             e['name'] as String, e['note'] as String? ?? '',
-            e['quantity'] as int? ?? 1, e['price'] as int? ?? 0,
+            e['quantity'] as int? ?? 1,
             e['position'] as int? ?? 0, false));
       case 'shopping_edit':
         final item = shopping[e['item']];
@@ -241,7 +241,6 @@ class Book {
           item.name = e['name'] as String? ?? item.name;
           item.note = e['note'] as String? ?? item.note;
           item.quantity = e['quantity'] as int? ?? item.quantity;
-          item.price = e['price'] as int? ?? item.price;
         }
       case 'shopping_done':
         final item = shopping[e['item']];
