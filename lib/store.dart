@@ -89,8 +89,8 @@ class Shop {
 
 class PersonalEntry {
   final int change; // Positive when I receive money, negative when I give it.
-  final String date, note;
-  PersonalEntry(this.change, this.date, this.note);
+  final String date, note, id;
+  PersonalEntry(this.change, this.date, this.note, [this.id = '']);
 }
 
 class PersonalAccount {
@@ -99,10 +99,20 @@ class PersonalAccount {
   final entries = <PersonalEntry>[];
 }
 
+class ShoppingItem {
+  final String id;
+  String month, name, note;
+  int quantity, price, position;
+  bool done;
+  ShoppingItem(this.id, this.month, this.name, this.note, this.quantity,
+      this.price, this.position, this.done);
+}
+
 class MonthlyBalance {
   final String month;
   final int general, personal, credit;
-  MonthlyBalance(this.month, this.general, this.personal, this.credit);
+  final int shopCredit;
+  MonthlyBalance(this.month, this.general, this.personal, this.credit, [this.shopCredit = 0]);
 }
 
 class Closed {
@@ -152,6 +162,7 @@ class Book {
 
   final people = <String, PersonalAccount>{};
   final months = <MonthlyBalance>[];
+  final shopping = <String, ShoppingItem>{};
 
   Book.replay(Iterable<Map<String, dynamic>> events) {
     final names = <String, String>{}; // last known name of every shop, removed ones too
@@ -162,7 +173,8 @@ class Book {
         owed += max(0, person.outstanding);
         credit += max(0, -person.outstanding);
       }
-      months.add(MonthlyBalance(label, total, owed, credit));
+      months.add(MonthlyBalance(label, total, owed, credit,
+          shops.fold<int>(0, (sum, sh) => sum + max(0, -shopBalance(sh.id)))));
     }
     void advance(String next) {
       if (month == null) { month = next; return; }
@@ -204,10 +216,44 @@ class Book {
         final amount = e['amount'] as int;
         if (amount <= 0) return;
         final entry = PersonalEntry(e['t'] == 'receive' ? amount : -amount,
-            e['date'] as String, e['note'] as String? ?? '');
+            e['date'] as String, e['note'] as String? ?? '', e['id'] as String);
         final account = people.putIfAbsent(id, PersonalAccount.new);
         account.entries.add(entry);
         account.outstanding += entry.change;
+      case 'unperson':
+        final id = e['person'] as String;
+        if (people[id]?.entries.isEmpty == true) people.remove(id);
+      case 'personal_del':
+        final account = people[e['person']];
+        if (account != null) {
+          account.entries.removeWhere((x) => x.id == e['entry']);
+          account.outstanding = account.entries.fold<int>(0, (sum, x) => sum + x.change);
+        }
+      case 'shopping_add':
+        final id = e['item'] as String;
+        shopping.putIfAbsent(id, () => ShoppingItem(id, e['month'] as String,
+            e['name'] as String, e['note'] as String? ?? '',
+            e['quantity'] as int? ?? 1, e['price'] as int? ?? 0,
+            e['position'] as int? ?? 0, false));
+      case 'shopping_edit':
+        final item = shopping[e['item']];
+        if (item != null) {
+          item.name = e['name'] as String? ?? item.name;
+          item.note = e['note'] as String? ?? item.note;
+          item.quantity = e['quantity'] as int? ?? item.quantity;
+          item.price = e['price'] as int? ?? item.price;
+        }
+      case 'shopping_done':
+        final item = shopping[e['item']];
+        if (item != null) item.done = e['done'] as bool;
+      case 'shopping_delete':
+        shopping.remove(e['item']);
+      case 'shopping_order':
+        final ids = e['items'] as List;
+        for (var i = 0; i < ids.length; i++) {
+          final item = shopping[ids[i]];
+          if (item != null && item.month == e['month']) item.position = i;
+        }
       case 'book':
         name = e['name'];
       case 'shop':
