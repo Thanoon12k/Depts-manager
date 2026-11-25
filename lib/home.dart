@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'pending.dart';
 import 'accounts.dart';
+import 'shopping.dart';
 import 'store.dart';
 import 'sync.dart';
 import 'theme.dart';
@@ -28,9 +29,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String? _shop;
   String? _page, _person;
 
-  void _back() => setState(() {
-    if (_person != null) { _person = null; } else { _page = null; }
-  });
   String _date = today();
   bool _syncing = false, _offline = false;
   String? _lastSync;
@@ -157,20 +155,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    if (_page != null) {
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) { if (!didPop) _back(); },
-        child: Scaffold(
-          appBar: AppBar(leading: BackButton(onPressed: _back),
-              title: Text(_b.people[_person]?.name ?? _page!)),
-          body: SafeArea(child: _page == 'الحسابات'
-              ? AccountsSummary(book: _b)
-              : PersonalLists(book: _b, selected: _person, record: _record,
-                  select: (id) => setState(() => _person = id))),
-        ),
-      );
-    }
     final shops = [..._b.shops]..sort((a, b) => _b.shopBalance(b.id).compareTo(_b.shopBalance(a.id)));
     return Scaffold(
       appBar: AppBar(
@@ -193,19 +177,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ],
       ),
+      bottomNavigationBar: _navigation(),
       body: SafeArea(
-        child: RefreshIndicator(
+        child: _page == 'الحسابات' ? AccountsSummary(book: _b)
+          : _page == 'قائمة المسواك' ? ShoppingPage(book: _b, record: _record)
+          : _page == 'قوائم خاصة' ? PersonalLists(book: _b, selected: _person, record: _record, select: (id) => setState(() => _person = id))
+          : RefreshIndicator(
           onRefresh: () => _sync(manual: true),
           child: ListView(
             controller: _scroll,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
               _hero(),
-              Row(children: [
-                for (final title in ['قوائم خاصة', 'الحسابات'])
-                  Expanded(child: Padding(padding: const EdgeInsets.all(3),
-                    child: Btn(title, kind: BtnKind.ghost, onTap: () => setState(() => _page = title)))),
-              ]),
               const SizedBox(height: 10),
               _form(),
               for (final s in shops) _shopCard(s),
@@ -217,6 +200,41 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  Widget _navigation() {
+    const tabs = <(String?,String,IconData,Color)>[
+      (null,'الرئيسية',Icons.home_rounded,Color(0xFFE8552A)),
+      ('قوائم خاصة','الخاصة',Icons.people_alt_rounded,Color(0xFF8658CB)),
+      ('الحسابات','الحسابات',Icons.insights_rounded,Color(0xFF0284C7)),
+      ('قائمة المسواك','المسواك',Icons.shopping_basket_rounded,Color(0xFF15A36B)),
+    ];
+    final reduce = MediaQuery.of(context).disableAnimations;
+    final duration = reduce ? Duration.zero : const Duration(milliseconds: 260);
+    return SafeArea(top:false,child:Padding(padding:const EdgeInsets.fromLTRB(12,8,12,12),child:Container(
+      padding:const EdgeInsets.symmetric(horizontal:5,vertical:8),
+      decoration:BoxDecoration(color:Colors.white,borderRadius:BorderRadius.circular(30),
+        border:Border.all(color:AppColors.line),
+        boxShadow:const [BoxShadow(color:Color(0x223A2A10),blurRadius:20,offset:Offset(0,8)),
+          BoxShadow(color:Color(0x11000000),blurRadius:4,offset:Offset(0,2))]),
+      child:Row(children:[for(final (page,label,icon,color) in tabs)
+        Expanded(child:Semantics(selected:_page==page,button:true,child:InkWell(
+          borderRadius:BorderRadius.circular(22),onTap:(){
+            if(_page==page)return;
+            FocusScope.of(context).unfocus();HapticFeedback.selectionClick();
+            setState(()=>_page=page);
+          },child:Column(mainAxisSize:MainAxisSize.min,children:[
+            AnimatedContainer(duration:duration,curve:Curves.easeOutBack,
+              transform:Matrix4.translationValues(0,_page==page?-4:0,0),
+              width:46,height:40,decoration:BoxDecoration(borderRadius:BorderRadius.circular(16),
+                gradient:LinearGradient(colors:_page==page?[color,color.withValues(alpha:.72)]:[Colors.white,AppColors.panel2]),
+                boxShadow:_page==page?[BoxShadow(color:color.withValues(alpha:.35),blurRadius:8,offset:const Offset(0,4))]:[]),
+              child:Icon(icon,color:_page==page?Colors.white:AppColors.muted,size:23)),
+            const SizedBox(height:3),
+            Text(label,maxLines:1,style:TextStyle(fontSize:11,fontWeight:_page==page?FontWeight.w800:FontWeight.w600,color:_page==page?color:AppColors.muted)),
+          ])))),
+      ]),
+    )));
   }
 
   /// "☁️" when everything is uploaded, "⏳ 3" while changes wait for the internet.
