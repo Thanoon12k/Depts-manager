@@ -40,6 +40,20 @@ class _PendingPageState extends State<PendingPage> {
       return '${iqd(x['amount'] as int)} د.ع · ${shop(x['shop'])}${note.isEmpty ? '' : ' · $note'}';
     }
     switch (e['t']) {
+      case 'shopping_add':
+        return '🛒 إضافة غرض · ${e['name']} · ${e['month']}';
+      case 'shopping_edit':
+        return '📝 تعديل غرض · ${e['name']}';
+      case 'shopping_done':
+        return '🛒 تغيير حالة شراء غرض';
+      case 'shopping_delete':
+        return '🗑 حذف غرض من المسواك';
+      case 'shopping_order':
+        return '🛒 ترتيب قائمة المسواك · ${e['month']}';
+      case 'unperson':
+        return 'حذف حساب خاص';
+      case 'personal_del':
+        return 'حذف حركة من حساب خاص';
       case 'person':
         return 'حساب خاص · ${e['name']}';
       case 'receive' || 'give':
